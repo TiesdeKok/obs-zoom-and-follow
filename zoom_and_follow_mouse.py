@@ -10,6 +10,11 @@ HOTKEY_NAME_TOG = "zoom_follow.toggle"
 HOTKEY_DESC_TOG = "Enable/Disable Mouse Zoom and Follow"
 USE_MANUAL_MONITOR_SIZE = "Manual Monitor Size"
 
+## Hotkey globals for freeze functionality
+hotkey_id_freeze = None
+HOTKEY_NAME_FREEZE = "zoom_follow.freeze"
+HOTKEY_DESC_FREEZE = "Freeze / Unfreeze Mouse Zoom and Follow"
+
 # -------------------------------------------------------------------
 
 
@@ -20,30 +25,33 @@ class CursorWindow:
     lock = True
     track = True
     monitor_idx = 0
+    override_monitor_size = False
     d_w = get_monitors()[monitor_idx].width
     d_h = get_monitors()[monitor_idx].height
-    d_w_override = get_monitors()[monitor_idx].width
-    d_h_override = get_monitors()[monitor_idx].height
     z_x = 0
     z_y = 0
     refresh_rate = 16
     source_name = ""
+    output_w = 1920
+    output_h = 720
     zoom_w = 1280
     zoom_h = 720
     active_border = 0.15
     max_speed = 160
     smooth = 1.0
     zoom_d = 300
+    frozen = False
+    first_Zoom = True
 
     def update_monitor_size(self):
-        monitors = get_monitors()
-        if self.monitor_idx < len(monitors):
-            monitor = get_monitors()[self.monitor_idx]
-            self.d_w = monitor.width
-            self.d_h = monitor.height
+        if not self.override_monitor_size:
+            monitors = get_monitors()
+            if self.monitor_idx < len(monitors):
+                monitor = get_monitors()[self.monitor_idx]
+                self.d_w = monitor.width
+                self.d_h = monitor.height
         else:
-            self.d_w = self.d_w_override
-            self.d_h = self.d_h_override
+            print('Not updating because forced manual.')
 
     def switch_to_monitor(self, monitor_name):
         for i, monitor in enumerate(get_monitors()):
@@ -65,6 +73,32 @@ class CursorWindow:
             f = (2 * p) - 2
             return 0.5 * f * f * f + 1
 
+    def currentSceneName(self):
+        source = obs.obs_frontend_get_current_scene()
+        name = obs.obs_source_get_name(source)
+        obs.obs_source_release(source)
+        return name
+
+    def getCurrentSceneItem(self, itemName):
+        source = obs.obs_frontend_get_current_scene()
+        item = ''
+        scene = obs.obs_scene_from_source(source)
+        item = obs.obs_scene_find_source(scene, itemName)
+        obs.obs_source_release(source)
+        return item
+
+    def fullscreenTransform(self, direction):
+        sceneItem = zoom.getCurrentSceneItem(zoom.source_name)
+        if direction == 'zoom':
+            size = obs.vec2()
+            size.x = self.output_w   
+            size.y = self.output_h   
+            obs.obs_sceneitem_set_bounds_type(sceneItem, 1 ) # 1 -> OBS_BOUNDS_STRETCH
+            obs.obs_sceneitem_set_bounds_alignment(sceneItem, 1) # 1 -> OBS_ALIGN_LEFT
+            obs.obs_sceneitem_set_bounds(sceneItem, size)
+        else:
+            obs.obs_sceneitem_set_bounds_type(sceneItem, 0 ) # 0 -> None
+
     def check_offset(self, arg1, arg2, smooth):
         result = round((arg1 - arg2) / smooth)
         return int(result)
@@ -83,6 +117,7 @@ class CursorWindow:
         zoom_r = self.z_x + self.zoom_w - int(self.active_border * borderScale)
         zoom_u = self.z_y + int(self.active_border * borderScale)
         zoom_d = self.z_y + self.zoom_h - int(self.active_border * borderScale)
+        #print('Active zone: ', zoom_l, zoom_r)
 
         # Set smoothing values
         smoothFactor = int((self.smooth * 9) / 10 + 1)
@@ -93,25 +128,32 @@ class CursorWindow:
         x_o = mousePos[0]
         y_o = mousePos[1]
 
-        if x_o < zoom_l:
-            val = self.check_offset(zoom_l, x_o, smoothFactor)
-            self.z_x -= val if val < self.max_speed else self.max_speed
-            move = True
-        if x_o > zoom_r:
-            val = self.check_offset(x_o, zoom_r, smoothFactor)
-            self.z_x += val if val < self.max_speed else self.max_speed
-            move = True
-        if y_o < zoom_u:
-            val1 = self.check_offset(zoom_u, y_o, smoothFactor)
-            val2 = self.check_offset(zoom_u, x_o, smoothFactor)
-            self.z_y -= val1 if val2 < self.max_speed else self.max_speed
-            move = True
-        if y_o > zoom_d:
-            val = self.check_offset(y_o, zoom_d, smoothFactor)
-            self.z_y += val if val < self.max_speed else self.max_speed
+        if not self.first_Zoom:
+            if x_o < zoom_l:
+                val = self.check_offset(zoom_l, x_o, smoothFactor)
+                self.z_x -= val if val < self.max_speed else self.max_speed
+                move = True
+            if x_o > zoom_r:
+                val = self.check_offset(x_o, zoom_r, smoothFactor)
+                self.z_x += val if val < self.max_speed else self.max_speed
+                move = True
+            if y_o < zoom_u:
+                val1 = self.check_offset(zoom_u, y_o, smoothFactor)
+                val2 = self.check_offset(zoom_u, x_o, smoothFactor)
+                self.z_y -= val1 if val2 < self.max_speed else self.max_speed
+                move = True
+            if y_o > zoom_d:
+                val = self.check_offset(y_o, zoom_d, smoothFactor)
+                self.z_y += val if val < self.max_speed else self.max_speed
+                move = True
+        else:
+            self.z_x = int(x_o - (self.zoom_w / 2))
+            self.z_y = int(y_o - (self.zoom_h / 2))
             move = True
 
         self.check_pos()
+
+        #print(x_o, y_o, zoom_l, self.z_x, self.z_y)
         return move
 
     def check_pos(self):
@@ -145,7 +187,12 @@ class CursorWindow:
 
         if inOut == 0:
             self.zi_timer = 0
-            if self.zo_timer < totalFrames:
+            if self.first_Zoom:
+                i(s, "left", self.z_x) 
+                i(s, "top", self.z_y) 
+                i(s, "cx", self.zoom_w)
+                i(s, "cy", self.zoom_h)
+            elif self.zo_timer < totalFrames:
                 self.zo_timer += 1
                 time = self.cubic_in_out(self.zo_timer / totalFrames)
                 i(s, "left", int(((1 - time) * self.z_x)))
@@ -195,10 +242,20 @@ class CursorWindow:
 
     def tracking(self):
         if self.lock:
-            self.follow(get_position())
-            self.set_crop(1)
+            if not self.frozen:
+                self.follow(get_position())
+                if self.first_Zoom:
+                    print('First Zoom')
+                    self.set_crop(1)
+                    self.first_Zoom = False
+                else:
+                    self.set_crop(1)
         else:
             self.reset_crop()
+
+    def freeze(self):
+        obs.remove_current_callback()
+        #self.set_crop(0)
 
     def tick(self):
         # Containing function that is run every frame
@@ -228,8 +285,11 @@ def script_defaults(settings):
     obs.obs_data_set_default_double(settings, "Smooth", zoom.smooth)
     obs.obs_data_set_default_int(settings, "Zoom", int(zoom.zoom_d))
     obs.obs_data_set_default_string(settings, "Monitor", get_monitors()[0].name)
+    obs.obs_data_set_default_int(settings, "Use Manual Monitor Width / Height", 0)
     obs.obs_data_set_default_int(settings, "Manual Monitor Width", get_monitors()[0].width)
     obs.obs_data_set_default_int(settings, "Manual Monitor Height", get_monitors()[0].height)
+    obs.obs_data_set_default_int(settings, "Output Resolution Width", 1920)
+    obs.obs_data_set_default_int(settings, "Output Resolution Height", 1080)
 
 
 def script_update(settings):
@@ -242,8 +302,14 @@ def script_update(settings):
     zoom.smooth = obs.obs_data_get_double(settings, "Smooth")
     zoom.zoom_d = obs.obs_data_get_double(settings, "Zoom")
     zoom.switch_to_monitor(obs.obs_data_get_string(settings, "Monitor"))
-    zoom.d_w_override = obs.obs_data_get_int(settings, "Manual Monitor Width")
-    zoom.d_h_override = obs.obs_data_get_int(settings, "Manual Monitor Height")
+    zoom.d_w = obs.obs_data_get_int(settings, "Manual Monitor Width")
+    zoom.d_h = obs.obs_data_get_int(settings, "Manual Monitor Height")
+    if not obs.obs_data_get_int(settings, "Manual Monitor Height"):
+        zoom.override_monitor_size = False
+    else:
+        zoom.override_monitor_size = True
+    zoom.output_w = obs.obs_data_get_int(settings, "Output Resolution Width")
+    zoom.output_h = obs.obs_data_get_int(settings, "Output Resolution Height")
 
 
 def script_properties():
@@ -274,8 +340,12 @@ def script_properties():
     for monitor in get_monitors():
         obs.obs_property_list_add_string(monitors_prop_list, monitor.name, monitor.name)
     obs.obs_property_list_add_string(monitors_prop_list, USE_MANUAL_MONITOR_SIZE, USE_MANUAL_MONITOR_SIZE)
+    obs.obs_properties_add_int(props, "Use Manual Monitor Width/Height", "Use Manual Monitor Width/Height", 0, 1, 1)
     obs.obs_properties_add_int(props, "Manual Monitor Width", "Manual Monitor Width", 320, 3840, 1)
     obs.obs_properties_add_int(props, "Manual Monitor Height", "Manual Monitor Height", 240, 3840, 1)
+
+    obs.obs_properties_add_int(props, "Output Resolution Width", "Output Resolution Width", 320, 3840, 1)
+    obs.obs_properties_add_int(props, "Output Resolution Height", "Output Resolution Height", 240, 3840, 1)
 
     obs.obs_properties_add_int(props, "Width", "Zoom Window Width", 320, 3840, 1)
     obs.obs_properties_add_int(props, "Height", "Zoom Window Height", 240, 3840, 1)
@@ -289,6 +359,8 @@ def script_properties():
 
 def script_load(settings):
     global hotkey_id_tog
+    global hotkey_id_freeze
+
     hotkey_id_tog = obs.obs_hotkey_register_frontend(
         HOTKEY_NAME_TOG, HOTKEY_DESC_TOG, toggle_zoom_follow
     )
@@ -296,9 +368,17 @@ def script_load(settings):
     obs.obs_hotkey_load(hotkey_id_tog, hotkey_save_array)
     obs.obs_data_array_release(hotkey_save_array)
 
+    hotkey_id_freeze = obs.obs_hotkey_register_frontend(
+        HOTKEY_NAME_FREEZE, HOTKEY_DESC_FREEZE, toggle_zoom_freeze
+    )
+    hotkey_save_array = obs.obs_data_get_array(settings, HOTKEY_NAME_FREEZE)
+    obs.obs_hotkey_load(hotkey_id_freeze, hotkey_save_array)
+    obs.obs_data_array_release(hotkey_save_array)
+
 
 def script_unload():
     obs.obs_hotkey_unregister(toggle_zoom_follow)
+    obs.obs_hotkey_unregister(toggle_zoom_freeze)
 
 
 def script_save(settings):
@@ -306,14 +386,50 @@ def script_save(settings):
     obs.obs_data_set_array(settings, HOTKEY_NAME_TOG, hotkey_save_array)
     obs.obs_data_array_release(hotkey_save_array)
 
+    hotkey_save_array = obs.obs_hotkey_save(hotkey_id_freeze)
+    obs.obs_data_set_array(settings, HOTKEY_NAME_FREEZE, hotkey_save_array)
+    obs.obs_data_array_release(hotkey_save_array)
+
 
 def toggle_zoom_follow(pressed):
     if pressed:
+
         if zoom.source_name != "" and zoom.flag:
+            zoom.first_Zoom = True
+            print('Activating...')
+
+            config = obs.obs_frontend_get_profile_config()
+            #print(obs.config_get_string(config, "RecFilePath"))
+
+            zoom.fullscreenTransform('zoom')
+
             zoom.update_monitor_size()
             obs.timer_add(zoom.tick, zoom.refresh_rate)
             zoom.lock = True
             zoom.flag = False
+            zoom.frozen = False
         elif not zoom.flag:
+            print('Deactivating...')
+
+            zoom.fullscreenTransform('unzoom')
+
             zoom.flag = True
             zoom.lock = False
+            zoom.frozen = False
+
+def toggle_zoom_freeze(pressed):
+    if pressed:
+        print('Freeze press detected')
+        if zoom.source_name != "":
+            if not zoom.flag:
+                if zoom.frozen:
+                    print('Unfreezing')
+                    zoom.frozen = False
+                else:
+                    print('Freezing')
+                    zoom.frozen = True
+            else:
+                print('Zoom not active')
+            #zoom.freeze()
+            #zoom.update_monitor_size()
+            #obs.remove_current_callback()
