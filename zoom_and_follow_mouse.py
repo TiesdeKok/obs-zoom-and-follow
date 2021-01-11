@@ -244,12 +244,14 @@ class CursorWindow:
         if self.lock:
             if not self.frozen:
                 self.follow(get_position())
+
                 if self.first_Zoom:
                     print('First Zoom')
                     self.set_crop(1)
                     self.first_Zoom = False
                 else:
                     self.set_crop(1)
+
         else:
             self.reset_crop()
 
@@ -376,6 +378,11 @@ def script_load(settings):
     obs.obs_data_array_release(hotkey_save_array)
 
 
+
+
+
+
+
 def script_unload():
     obs.obs_hotkey_unregister(toggle_zoom_follow)
     obs.obs_hotkey_unregister(toggle_zoom_freeze)
@@ -408,6 +415,15 @@ def toggle_zoom_follow(pressed):
             zoom.lock = True
             zoom.flag = False
             zoom.frozen = False
+
+            camera_item = zoom.getCurrentSceneItem('Camera - Circle')
+            if obs.obs_sceneitem_visible(camera_item):
+                obs.obs_sceneitem_set_visible(camera_item, False)
+
+            camera_item = zoom.getCurrentSceneItem('Camera - Circle - Small')
+            if not obs.obs_sceneitem_visible(camera_item):
+                obs.obs_sceneitem_set_visible(camera_item, True)
+
         elif not zoom.flag:
             print('Deactivating...')
 
@@ -416,6 +432,14 @@ def toggle_zoom_follow(pressed):
             zoom.flag = True
             zoom.lock = False
             zoom.frozen = False
+
+            camera_item = zoom.getCurrentSceneItem('Camera - Circle')
+            if not obs.obs_sceneitem_visible(camera_item):
+                obs.obs_sceneitem_set_visible(camera_item, True)
+
+            camera_item = zoom.getCurrentSceneItem('Camera - Circle - Small')
+            if obs.obs_sceneitem_visible(camera_item):
+                obs.obs_sceneitem_set_visible(camera_item, False)
 
 def toggle_zoom_freeze(pressed):
     if pressed:
